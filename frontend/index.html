@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>FraudScan — Job Posting Detector</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app" id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+const API = 'http://localhost:5000/api';
+
+function App() {
+  const [phase, setPhase]       = useState('idle');   // idle | uploading | running | done | error
+  const [file, setFile]         = useState(null);
+  const [progress, setProgress] = useState(0);
+  const [step, setStep]         = useState('');
+  const [results, setResults]   = useState(null);
+  const [error, setError]       = useState(null);
+  const [dragover, setDragover] = useState(false);
+  const [outputPath, setOutputPath] = useState('');
+  const fileRef = useRef();
+  const pollRef = useRef();
+
+  useEffect(() => {
+    fetch(`${API}/output-path`).then(r=>r.json()).then(d=>setOutputPath(d.path)).catch(()=>{});
+  }, []);
+
+  const poll = useCallback(() => {
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await fetch(`${API}/status`).then(r=>r.json());
+        setProgress(s.progress);
+        setStep(s.step);
+        if (s.status === 'done') {
+          clearInterval(pollRef.current);
+          const res = await fetch(`${API}/results`).then(r=>r.json());
+          setResults(res);
+          setPhase('done');
+        } else if (s.status === 'error') {
+          clearInterval(pollRef.current);
+          setError(s.error);
+          setPhase('error');
+        }
+      } catch(e) { /* backend not ready yet */ }
+    }, 800);
+  }, []);
+
+  useEffect(() => () => clearInterval(pollRef.current), []);
+
+  const handleFile = f => {
+    if (!f) return;
+    if (!f.name.endsWith('.csv')) { alert('Please upload a CSV file'); return; }
+    setFile(f);
+  };
+
+  const handleDrop = e => {
+    e.preventDefault(); setDragover(false);
+    handleFile(e.dataTransfer.files[0]);
+  };
+
+  const handleAnalyse = async () => {
+    if (!file) return;
+    setPhase('uploading');
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      await fetch(`${API}/upload`, { method: 'POST', body: fd });
+      setPhase('running');
+      poll();
+    } catch(e) {
+      setError('Could not connect to backend. Is app.py running?');
+      setPhase('error');
+    }
+  };
+
+  const handleReset = async () => {
+    clearInterval(pollRef.current);
+    await fetch(`${API}/reset`, { method: 'POST' }).catch(()=>{});
+    setPhase('idle'); setFile(null); setResults(null);
+    setError(null); setProgress(0); setStep('');
+  };
+
+  const fmt = v => (v * 100).toFixed(2) + '%';
+  const better = (a, b, key) => a[key] >= b[key] ? 'rf' : 'gb';
+
+  return (
+    <>
+      <header>
+        <div>
+          <div className="logo">Fraud<span>Scan</span></div>
+          <div className="logo-sub">Explainable ML · Job Posting Detector</div>
+        </div>
+        <div className="badge">v1.0 · EMSCAD Dataset</div>
+      </header>
+
+      <div className="app">
+
+        {/* ── IDLE / HERO ── */}
+        {phase === 'idle' && (
+          <>
+            <div className="hero">
+              <h1>Detect <em>Fraudulent</em><br/>Job Postings</h1>
+              <p>Upload the EMSCAD CSV dataset and get a full ML analysis with explainability in seconds.</p>
+              <div className="hero-tags">
+                <span className="hero-tag lit">TF-IDF NLP</span>
+                <span className="hero-tag lit">Random Forest</span>
+                <span className="hero-tag lit">Gradient Boosting</span>
+                <span className="hero-tag lit">SHAP Explainability</span>
+                <span className="hero-tag">SMOTE Balancing</span>
+                <span className="hero-tag">Feature Engineering</span>
+              </div>
+            </div>
+
+            <div className="section-label">Step 1 — Upload Dataset</div>
+            <div
+              className={`dropzone${dragover ? ' dragover' : ''}`}
+              onClick={() => fileRef.current.click()}
+              onDragOver={e=>{e.preventDefault();setDragover(true);}}
+              onDragLeave={()=>setDragover(false)}
+              onDrop={handleDrop}
+            >
+              <span className="dropzone-icon">📂</span>
+              <h2>{file ? file.name : 'Drop your CSV here'}</h2>
+              <p>{file ? `${(file.size/1024/1024).toFixed(1)} MB ready to analyse` : 'or click to browse — fake_job_postings.csv'}</p>
+              <input ref={fileRef} type="file" accept=".csv"
+                onChange={e=>handleFile(e.target.files[0])} />
+            </div>
+
+            {file && (
+              <div className="file-info">
+                <span className="file-icon">📄</span>
+                <span className="file-name">{file.name}</span>
+                <span className="file-size">{(file.size/1024/1024).toFixed(2)} MB</span>
+              </div>
+            )}
+
+            <div className="actions">
+              <button className="btn btn-primary" onClick={handleAnalyse} disabled={!file}>
+                ▶ Run Analysis
+              </button>
+              {file && <button className="btn btn-ghost" onClick={()=>setFile(null)}>Clear</button>}
+            </div>
+            {outputPath && (
+              <div className="output-note">📁 Outputs → {outputPath}</div>
+            )}
+          </>
+        )}
+
+        {/* ── UPLOADING / RUNNING ── */}
+        {(phase === 'uploading' || phase === 'running') && (
+          <div className="progress-section">
+            <div className="progress-header">
+              <div>
+                <div className="progress-title pulse">
+                  {phase === 'uploading' ? '⬆ Uploading dataset...' : '⚙ Running ML pipeline...'}
+                </div>
+                <div className="progress-step" style={{marginTop:6}}>{step}</div>
+              </div>
+              <div className="progress-pct">{progress}%</div>
+            </div>
+            <div className="progress-bar-track">
+              <div className="progress-bar-fill" style={{width: progress+'%'}} />
+            </div>
+            <div style={{marginTop:20, color:'var(--muted)', fontSize:13}}>
+              This usually takes 1–3 minutes depending on your dataset size.
+            </div>
+          </div>
+        )}
+
+        {/* ── ERROR ── */}
+        {phase === 'error' && (
+          <>
+            <div className="error-card">
+              <div className="error-title">❌ Something went wrong</div>
+              <div className="error-msg">{error}</div>
+            </div>
+            <button className="btn btn-ghost" onClick={handleReset}>↩ Try Again</button>
+          </>
+        )}
+
+        {/* ── DONE / RESULTS ── */}
+        {phase === 'done' && results && (
+          <>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:32}}>
+              <div>
+                <div className="section-label">Analysis Complete ✓</div>
+                <h2 style={{fontFamily:'Syne,sans-serif', fontSize:24, fontWeight:800}}>Results Dashboard</h2>
+              </div>
+              <button className="btn btn-ghost" onClick={handleReset}>↩ New Analysis</button>
+            </div>
+
+            {/* Dataset stats */}
+            <div className="section-label">Dataset Overview</div>
+            <div className="stats-grid">
+              <div className="stat-card">
+                <div className="stat-label">Total Records</div>
+                <div className="stat-value">{results.dataset.total.toLocaleString()}</div>
+                <div className="stat-sub">Job postings</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Legitimate</div>
+                <div className="stat-value green">{results.dataset.legitimate.toLocaleString()}</div>
+                <div className="stat-sub">Real postings</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Fraudulent</div>
+                <div className="stat-value red">{results.dataset.fraudulent.toLocaleString()}</div>
+                <div className="stat-sub">Fake postings</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Fraud Rate</div>
+                <div className="stat-value blue">{results.dataset.fraud_rate}%</div>
+                <div className="stat-sub">Class imbalance</div>
+              </div>
+            </div>
+
+            {/* Model performance table */}
+            <div className="section-label">Model Performance</div>
+            <div className="results-table-wrap">
+              <div className="results-table-header">📊 Evaluation Metrics</div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Model</th>
+                    <th>Accuracy</th>
+                    <th>Precision</th>
+                    <th>Recall</th>
+                    <th>F1-Score</th>
+                    <th>AUC-ROC</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    ['Random Forest',     results.random_forest,     'rf'],
+                    ['Gradient Boosting', results.gradient_boosting,  'gb'],
+                  ].map(([name, m, key]) => (
+                    <tr key={key}>
+                      <td><span className="model-name">{name}</span></td>
+                      {['accuracy','precision','recall','f1','auc'].map(metric => {
+                        const rfV = results.random_forest[metric];
+                        const gbV = results.gradient_boosting[metric];
+                        const isBest = key==='rf' ? rfV >= gbV : gbV > rfV;
+                        return (
+                          <td key={metric}>
+                            <span className={`metric-val${isBest?' best':''}`}>
+                              {fmt(m[metric])}
+                            </span>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Charts */}
+            <div className="section-label">Visualizations</div>
+            <div className="charts-grid">
+              {results.charts.class_dist && (
+                <div className="chart-card">
+                  <div className="chart-title">
+                    <div className="chart-dot" style={{background:'var(--accent)'}}/>
+                    Class Distribution
+                  </div>
+                  <img className="chart-img" src={`data:image/png;base64,${results.charts.class_dist}`}/>
+                </div>
+              )}
+              {results.charts.roc && (
+                <div className="chart-card">
+                  <div className="chart-title">
+                    <div className="chart-dot" style={{background:'var(--blue)'}}/>
+                    ROC Curves
+                  </div>
+                  <img className="chart-img" src={`data:image/png;base64,${results.charts.roc}`}/>
+                </div>
+              )}
+              {results.charts.confusion && (
+                <div className="chart-card wide">
+                  <div className="chart-title">
+                    <div className="chart-dot" style={{background:'var(--accent2)'}}/>
+                    Confusion Matrices
+                  </div>
+                  <img className="chart-img" src={`data:image/png;base64,${results.charts.confusion}`}/>
+                </div>
+              )}
+              {results.charts.comparison && (
+                <div className="chart-card wide">
+                  <div className="chart-title">
+                    <div className="chart-dot" style={{background:'#a78bfa'}}/>
+                    Model Comparison
+                  </div>
+                  <img className="chart-img" src={`data:image/png;base64,${results.charts.comparison}`}/>
+                </div>
+              )}
+              {results.charts.feature_imp && (
+                <div className="chart-card">
+                  <div className="chart-title">
+                    <div className="chart-dot" style={{background:'#8b5cf6'}}/>
+                    Feature Importance
+                  </div>
+                  <img className="chart-img" src={`data:image/png;base64,${results.charts.feature_imp}`}/>
+                </div>
+              )}
+              {results.charts.shap && (
+                <div className="chart-card">
+                  <div className="chart-title">
+                    <div className="chart-dot" style={{background:'#06b6d4'}}/>
+                    SHAP Explainability
+                  </div>
+                  <img className="chart-img" src={`data:image/png;base64,${results.charts.shap}`}/>
+                </div>
+              )}
+            </div>
+
+            {outputPath && (
+              <div className="output-note">
+                ✅ All charts + results.json saved to → {outputPath}
+              </div>
+            )}
+          </>
+        )}
+
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+flask
+flask-cors
+pandas
+numpy
+scikit-learn
+imbalanced-learn
+shap
+matplotlib
+seaborn
+scipy
